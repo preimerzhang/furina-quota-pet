@@ -1,0 +1,17 @@
+# Keep the repository focused on the runnable pet and final assets.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/furina-pet/
+/furina-pet/*
+!/furina-pet/desktop/
+!/furina-pet/furina/
+!/furina-pet/character-notes.md
+!/furina-pet/芙宁娜.png
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+*.zip
