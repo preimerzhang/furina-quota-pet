@@ -116,7 +116,7 @@ def normalize_quota(data: dict) -> dict:
                     pass
             windows.append({'kind': kind, 'minutes': window.get('windowDurationMins'),
                             'remaining': max(0.0, min(100.0, 100.0 - used)) if valid else None,
-                            'resetLocal': reset})
+                            'resetLocal': reset, 'resetAt': timestamp if reset else None})
         if windows:
             result.append({'name': bucket.get('limitName') or key, 'windows': windows})
     if not result:

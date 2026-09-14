@@ -17,6 +17,9 @@ if(-not $PythonExe) {
 }
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class FurinaDpi { [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c); }'
+[AppContext]::SetSwitch('Switch.System.Windows.DoNotScaleForDpiChanges',$false)
+try {[void][FurinaDpi]::SetThreadDpiAwarenessContext([IntPtr](-4))} catch {Write-Warning '使用系统默认显示缩放。'}
 $script:testMode = $SmokeTest -or $IntegrationTest -or $DesktopTest
 $script:temporarySettings=$script:testMode -and -not $SettingsPath
 if(-not $SettingsPath){$SettingsPath=if($script:testMode){Join-Path $PSScriptRoot ('test-settings-'+[Guid]::NewGuid().ToString()+'.json')}else{Join-Path $PSScriptRoot 'settings.json'}}
@@ -84,6 +87,7 @@ $script:pet.Content=$script:image
 $workArea=[Windows.SystemParameters]::WorkArea
 $script:pet.Left=$workArea.Right-220; $script:pet.Top=$workArea.Bottom-240
 . (Join-Path $PSScriptRoot 'companion.ps1')
+. (Join-Path $PSScriptRoot 'extras.ps1')
 
 [xml]$popupXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -126,6 +130,7 @@ function Position-Popup {
     if($x -lt $area.Left){$x=$script:pet.Left+$script:pet.Width+12}
     $script:popup.Left=[Math]::Max($area.Left,[Math]::Min($x,$area.Right-340))
     $script:popup.Top=[Math]::Max($area.Top,[Math]::Min($script:pet.Top+$script:pet.Height-$height,$area.Bottom-$height))
+    if($script:popup.IsVisible){Place-QuotaNative}
 }
 function Get-WindowLabel($WindowData) {
     if($WindowData.minutes -eq 300){return '五小时额度'}
@@ -171,9 +176,14 @@ function Render-Quota($Data) {
     $script:popup.UpdateLayout(); Position-Popup
 }
 function Refresh-Quota {
-    if($script:queryProcess -and -not $script:queryProcess.HasExited){return}
-    $script:cards.Children.Clear(); $script:status.Text='正在查看额度…'; $script:refreshButton.IsEnabled=$false
-    Set-PetState 'running'
+    param([switch]$Background)
+    if($script:queryProcess) {
+        if(-not $Background){$script:queryBackground=$false; $script:status.Text='正在查看额度…'; $script:refreshButton.IsEnabled=$false; Set-PetState 'running'}
+        return
+    }
+    $script:queryBackground=[bool]$Background
+    $script:lastQuotaReadOk=$false
+    if(-not $Background){$script:cards.Children.Clear(); $script:status.Text='正在查看额度…'; $script:refreshButton.IsEnabled=$false; Set-PetState 'running'}
     try {
         $info=New-Object Diagnostics.ProcessStartInfo
         $info.FileName=$PythonExe
@@ -186,14 +196,13 @@ function Refresh-Quota {
         $script:queryStarted=[DateTime]::UtcNow
         $script:queryTimer.Start()
     } catch {
-        $script:status.Text='无法启动额度查询，请检查 Python 运行环境。'
-        $script:refreshButton.IsEnabled=$true; Set-PetState 'failed'
+        if(-not $Background){$script:status.Text='无法启动额度查询，请检查 Python 运行环境。'; $script:refreshButton.IsEnabled=$true; Set-PetState 'failed'}
     }
 }
 function Show-Quota {
     $script:clickTimer.Stop()
     $script:bubble.IsOpen=$false
-    Position-Popup; $script:popup.Show(); Refresh-Quota
+    Position-Popup; $script:popup.Show(); Place-QuotaNative; Refresh-Quota
 }
 $script:refreshButton.Add_Click({Refresh-Quota})
 $script:queryTimer=New-Object Windows.Threading.DispatcherTimer
@@ -203,7 +212,7 @@ $script:queryTimer.Add_Tick({
     if(-not $script:queryProcess.HasExited) {
         if(([DateTime]::UtcNow-$script:queryStarted).TotalSeconds -gt 26) {
             $script:queryProcess.Kill(); $script:queryProcess.Dispose(); $script:queryProcess=$null; $script:status.Text='查询超时，请检查网络后重试。'
-            $script:queryTimer.Stop(); $script:refreshButton.IsEnabled=$true; Set-PetState 'failed'
+            $script:queryTimer.Stop(); $script:refreshButton.IsEnabled=$true; if(-not $script:queryBackground){Set-PetState 'failed'}
         }
         return
     }
@@ -213,10 +222,12 @@ $script:queryTimer.Add_Tick({
         $output=$script:queryProcess.StandardOutput.ReadToEnd()
         $data=$output | ConvertFrom-Json
         if(-not $data.ok){throw $data.error}
-        Render-Quota $data; Set-PetState 'waving'
+        $script:lastQuotaReadOk=$true
+        Check-QuotaAlerts $data
+        if(-not $script:queryBackground){Render-Quota $data; Set-PetState 'waving'}
     } catch {
         $script:status.Text=if($data -and $data.error){$data.error}else{'额度查询失败，请确认 Codex 已登录并检查网络。'}
-        Set-PetState 'failed'
+        if(-not $script:queryBackground){Set-PetState 'failed'}
     } finally {
         $script:queryProcess.Dispose(); $script:queryProcess=$null; $script:refreshButton.IsEnabled=$true
     }
@@ -226,7 +237,7 @@ $script:animationTimer.Add_Tick({
     $script:frame++
     if($script:frame -ge $script:cells[$script:state].Count) {
         if($script:state -in @('waving','failed','jumping')) {
-            Set-PetState $(if($script:state -eq 'waving' -and $script:popup.IsVisible){'review'}else{'idle'})
+            Set-PetState $(if($script:state -eq 'waving' -and $script:popup.IsVisible){'review'}else{Get-RestState})
             return
         }
         $script:frame=0
@@ -275,7 +286,7 @@ $script:image.Add_MouseLeftButtonUp({
     if(-not $script:press){return}
     $wasDragging=$script:dragging; $script:press=$null; $script:dragging=$false
     $script:image.ReleaseMouseCapture()
-    if($wasDragging){Set-PetState 'idle'; try {Save-Preferences} catch {Write-Warning '位置未能保存。'}}
+    if($wasDragging){Set-PetState (Get-RestState); Snap-PetEdges; try {Save-Preferences} catch {Write-Warning '位置未能保存。'}}
     elseif(-not $script:doubleClick){$script:clickTimer.Start()}
 })
 $script:image.Add_LostMouseCapture({$script:press=$null; if($script:dragging){$script:dragging=$false; Set-PetState 'idle'}})
@@ -370,10 +381,16 @@ if($DesktopTest) {
     $script:testTimer=New-Object Windows.Threading.DispatcherTimer
     $script:testTimer.Interval=[TimeSpan]::FromMilliseconds(100)
     $script:testTimer.Add_Tick({
+        if($script:testingBackground) {
+            if($script:queryTimer.IsEnabled){return}
+            if(-not $script:lastQuotaReadOk -or $script:state -ne 'idle'){throw 'Background quota read failed or interrupted animation'}
+            $script:testOutcome='Integration passed: drag/double click skip quota; single click and quiet background quota reads succeed.'
+            $script:testTimer.Stop(); $script:pet.Close(); return
+        }
         if($script:status.Text.StartsWith('更新于')) {
             if($script:cards.Children.Count -lt 1){throw 'Live quota cards empty'}
             $script:testOutcome='Integration passed: drag and double click skip quota; single click displays live quota; '+$script:status.Text
-            $script:testTimer.Stop(); $script:pet.Close()
+            $script:testingBackground=$true; $script:popup.Hide(); Set-PetState 'idle'; Refresh-Quota -Background
         } elseif((-not $script:queryTimer.IsEnabled -and -not $script:clickTimer.IsEnabled) -or ([DateTime]::UtcNow-$script:testStarted).TotalSeconds -gt 30) {
             $script:testOutcome='Click integration failed: '+$script:status.Text
             $script:testTimer.Stop(); $script:pet.Close()
@@ -414,6 +431,7 @@ if($DesktopTest) {
     if($script:testStartupCommand -notlike '*-WindowStyle Hidden*-File "*launch.ps1"'){throw 'Startup command quoting failed'}
     Set-StartupEnabled $false
     if($script:testStartupCommand){throw 'Startup disable failed'}
+    Test-Extras
     $script:pet.Hide()
     $testData='{"ok":true,"buckets":[{"name":"codex","windows":[{"kind":"primary","minutes":300,"remaining":42,"resetLocal":"09-13 23:43"},{"kind":"secondary","minutes":10080,"remaining":null,"resetLocal":null}]}],"updatedLocal":"12:00:00"}' | ConvertFrom-Json
     Render-Quota $testData
@@ -424,6 +442,7 @@ if($DesktopTest) {
     if($script:temporarySettings -and (Test-Path -LiteralPath $SettingsPath)){Remove-Item -LiteralPath $SettingsPath}
     Write-Output ('WPF smoke passed: loaded scale '+$initialScale+'%; saved size/position/preferences; interaction; hide/restore; startup command; quota cards.')
 } else {
+    $script:focusTimer.Start()
     $script:animationTimer.Start()
     $script:gazeTimer.Start()
     $script:desktopTimer.Start()

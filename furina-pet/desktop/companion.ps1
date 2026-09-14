@@ -61,6 +61,7 @@ function Set-StartupEnabled([bool]$Enabled) {
     }
 }
 function Save-Preferences {
+    Record-NativePosition
     $script:preferences.left=$script:pet.Left; $script:preferences.top=$script:pet.Top
     $temporary=$SettingsPath+'.tmp'
     $script:preferences | ConvertTo-Json | Set-Content -LiteralPath $temporary -Encoding UTF8
@@ -82,6 +83,11 @@ function Apply-PetSize {
 }
 function Restore-PetPosition {
     Apply-PetSize
+    if($null -ne $script:preferences.physicalX -and $null -ne $script:preferences.physicalY) {
+        Set-NativePosition $script:pet $script:preferences.physicalX $script:preferences.physicalY
+        Snap-PetEdges $false
+        return
+    }
     if($null -ne $script:preferences.left -and $null -ne $script:preferences.top) {
         $script:pet.Left=$script:preferences.left; $script:pet.Top=$script:preferences.top
     }
@@ -128,7 +134,7 @@ $script:bubbleTimer=New-Object Windows.Threading.DispatcherTimer
 $script:bubbleTimer.Interval=[TimeSpan]::FromSeconds(3)
 $script:bubbleTimer.Add_Tick({$script:bubble.IsOpen=$false; $script:bubbleTimer.Stop()})
 function Play-Interaction {
-    if($script:queryTimer.IsEnabled -or -not $script:pet.IsVisible){return}
+    if(($script:focusMode -eq 'focus' -and -not $script:focusPaused) -or $script:queryTimer.IsEnabled -or -not $script:pet.IsVisible){return}
     Set-PetState (@('waving','jumping') | Get-Random)
     $script:lastInteraction=[DateTime]::UtcNow
     if($script:preferences.phrases) {
@@ -231,7 +237,7 @@ $script:desktopTimer=New-Object Windows.Threading.DispatcherTimer
 $script:desktopTimer.Interval=[TimeSpan]::FromMilliseconds(700)
 function Update-DesktopVisibility([bool]$Fullscreen) {
     if($script:manuallyHidden){return}
-    $shouldHide=$script:preferences.hideFullscreen -and $Fullscreen -and -not $script:settingsWindow.IsVisible
+    $shouldHide=$script:preferences.hideFullscreen -and $Fullscreen -and -not $script:settingsWindow.IsVisible -and -not $script:extraWindow.IsVisible
     if($shouldHide -and -not $script:fullscreenHidden) {
         $script:fullscreenHidden=$true; $script:clickTimer.Stop(); $script:popup.Hide(); $script:bubble.IsOpen=$false
         $script:pet.Hide(); $script:animationTimer.Stop(); $script:gazeTimer.Stop()
@@ -244,6 +250,7 @@ $script:desktopTimer.Add_Tick({
 })
 function Close-Companion {
     $script:exiting=$true
+    $script:focusTimer.Stop(); $script:extraWindow.Close()
     $script:clickTimer.Stop(); $script:bubbleTimer.Stop(); $script:desktopTimer.Stop()
     $script:bubble.IsOpen=$false; $script:settingsWindow.Close()
     if($script:hotkeyRegistered){[void][FurinaDesktop]::UnregisterHotKey($script:hotkeyHandle,7821)}
