@@ -15,3 +15,7 @@ __pycache__/
 .env
 .env.*
 *.zip
+/furina-pet/desktop/settings.json
+/furina-pet/desktop/settings.json.tmp
+/furina-pet/desktop/test-settings-*.json
+/furina-pet/desktop/test-settings-*.json.tmp

@@ -1,7 +1,9 @@
 ﻿param(
     [string]$PythonExe = '',
     [switch]$SmokeTest,
-    [switch]$IntegrationTest
+    [switch]$IntegrationTest,
+    [switch]$DesktopTest,
+    [string]$SettingsPath = ''
 )
 $ErrorActionPreference = 'Stop'
 if(-not $PythonExe) {
@@ -15,7 +17,9 @@ if(-not $PythonExe) {
 }
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 Add-Type -AssemblyName System.Windows.Forms
-$script:testMode = $SmokeTest -or $IntegrationTest
+$script:testMode = $SmokeTest -or $IntegrationTest -or $DesktopTest
+$script:temporarySettings=$script:testMode -and -not $SettingsPath
+if(-not $SettingsPath){$SettingsPath=if($script:testMode){Join-Path $PSScriptRoot ('test-settings-'+[Guid]::NewGuid().ToString()+'.json')}else{Join-Path $PSScriptRoot 'settings.json'}}
 $script:instanceMutex = New-Object Threading.Mutex($false, 'Local\FurinaQuotaPet_v1')
 if (-not $script:testMode) {
     try { $acquired=$script:instanceMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired=$true }
@@ -75,10 +79,11 @@ $script:pet.AllowsTransparency=$true; $script:pet.Background=[Windows.Media.Brus
 $script:pet.Topmost=$true; $script:pet.ShowInTaskbar=$false
 $script:image = New-Object Windows.Controls.Image
 $script:image.Stretch='Uniform'
-$script:image.ToolTip='单击查看额度 · 拖动移动 · 右键退出'
+$script:image.ToolTip='单击查看额度 · 双击互动 · 拖动移动 · 右键设置'
 $script:pet.Content=$script:image
 $workArea=[Windows.SystemParameters]::WorkArea
 $script:pet.Left=$workArea.Right-220; $script:pet.Top=$workArea.Bottom-240
+. (Join-Path $PSScriptRoot 'companion.ps1')
 
 [xml]$popupXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -115,10 +120,10 @@ function Set-PetState([string]$NewState) {
     $script:animationTimer.Interval=[TimeSpan]::FromMilliseconds($script:animations[$NewState].durations[0])
 }
 function Position-Popup {
-    $area=[Windows.SystemParameters]::WorkArea
+    $area=Get-PetWorkArea
     $height=if($script:popup.ActualHeight -gt 0){$script:popup.ActualHeight}else{350}
     $x=$script:pet.Left-352
-    if($x -lt $area.Left){$x=$script:pet.Left+204}
+    if($x -lt $area.Left){$x=$script:pet.Left+$script:pet.Width+12}
     $script:popup.Left=[Math]::Max($area.Left,[Math]::Min($x,$area.Right-340))
     $script:popup.Top=[Math]::Max($area.Top,[Math]::Min($script:pet.Top+$script:pet.Height-$height,$area.Bottom-$height))
 }
@@ -186,6 +191,8 @@ function Refresh-Quota {
     }
 }
 function Show-Quota {
+    $script:clickTimer.Stop()
+    $script:bubble.IsOpen=$false
     Position-Popup; $script:popup.Show(); Refresh-Quota
 }
 $script:refreshButton.Add_Click({Refresh-Quota})
@@ -231,8 +238,8 @@ Set-PetState 'idle'
 $script:gazeTimer=New-Object Windows.Threading.DispatcherTimer
 $script:gazeTimer.Interval=[TimeSpan]::FromMilliseconds(80)
 $script:gazeTimer.Add_Tick({
-    if($script:state -ne 'idle' -or $script:press -or -not $script:pet.IsVisible){return}
-    $anchor=$script:pet.PointToScreen((New-Object Windows.Point(96,80)))
+    if(-not $script:preferences.gaze -or $script:state -ne 'idle' -or $script:press -or -not $script:pet.IsVisible){return}
+    $anchor=$script:pet.PointToScreen((New-Object Windows.Point(($script:pet.Width/2),($script:pet.Height*80/208))))
     $cursor=[Windows.Forms.Cursor]::Position
     $dx=$cursor.X-$anchor.X; $dy=$cursor.Y-$anchor.Y
     $distance=[Math]::Sqrt($dx*$dx+$dy*$dy)
@@ -246,6 +253,9 @@ $script:gazeTimer.Add_Tick({
 
 $script:image.Add_MouseLeftButtonDown({
     param($sender,$eventArgs)
+    $script:clickTimer.Stop()
+    $script:doubleClick=$eventArgs.ClickCount -eq 2
+    if($script:doubleClick){Play-Interaction}
     $script:press=$script:pet.PointToScreen($eventArgs.GetPosition($script:pet))
     $script:startLeft=$script:pet.Left; $script:startTop=$script:pet.Top
     $script:dragging=$false; [void]$script:image.CaptureMouse()
@@ -257,7 +267,7 @@ $script:image.Add_MouseMove({
     $source=[Windows.PresentationSource]::FromVisual($script:pet)
     $delta=$source.CompositionTarget.TransformFromDevice.Transform((New-Object Windows.Vector(($point.X-$script:press.X),($point.Y-$script:press.Y))))
     if([Math]::Abs($delta.X)+[Math]::Abs($delta.Y) -gt 6) {
-        if(-not $script:dragging) { $script:dragging=$true; $script:popup.Hide(); Set-PetState $(if($delta.X -ge 0){'running-right'}else{'running-left'}) }
+        if(-not $script:dragging) { $script:dragging=$true; $script:popup.Hide(); $script:bubble.IsOpen=$false; Set-PetState $(if($delta.X -ge 0){'running-right'}else{'running-left'}) }
         $script:pet.Left=$script:startLeft+$delta.X; $script:pet.Top=$script:startTop+$delta.Y
     }
 })
@@ -265,14 +275,18 @@ $script:image.Add_MouseLeftButtonUp({
     if(-not $script:press){return}
     $wasDragging=$script:dragging; $script:press=$null; $script:dragging=$false
     $script:image.ReleaseMouseCapture()
-    if($wasDragging){Set-PetState 'idle'}else{Show-Quota}
+    if($wasDragging){Set-PetState 'idle'; try {Save-Preferences} catch {Write-Warning '位置未能保存。'}}
+    elseif(-not $script:doubleClick){$script:clickTimer.Start()}
 })
 $script:image.Add_LostMouseCapture({$script:press=$null; if($script:dragging){$script:dragging=$false; Set-PetState 'idle'}})
 $menu=New-Object Windows.Controls.ContextMenu
-foreach($itemText in @('查看 / 刷新额度','关闭额度面板','退出芙宁娜')) {
+foreach($itemText in @('查看 / 刷新额度','互动一下','设置','隐藏到托盘','关闭额度面板','退出芙宁娜')) {
     $item=New-Object Windows.Controls.MenuItem; $item.Header=$itemText
     switch($itemText) {
         '查看 / 刷新额度' {$item.Add_Click({Show-Quota})}
+        '互动一下' {$item.Add_Click({Play-Interaction})}
+        '设置' {$item.Add_Click({Show-Settings})}
+        '隐藏到托盘' {$item.Add_Click({Hide-Pet})}
         '关闭额度面板' {$item.Add_Click({$script:popup.Hide(); if($script:state -eq 'review'){Set-PetState 'idle'}})}
         '退出芙宁娜' {$item.Add_Click({$script:pet.Close()})}
     }
@@ -280,12 +294,60 @@ foreach($itemText in @('查看 / 刷新额度','关闭额度面板','退出芙�
 }
 $script:image.ContextMenu=$menu
 $script:pet.Add_Closed({
+    Close-Companion
     $script:animationTimer.Stop(); $script:queryTimer.Stop(); $script:gazeTimer.Stop(); $script:popup.Close()
     if($script:queryProcess){if(-not $script:queryProcess.HasExited){$script:queryProcess.Kill()}; $script:queryProcess.Dispose()}
     if($script:ownsMutex){$script:instanceMutex.ReleaseMutex()}
     $script:instanceMutex.Dispose()
+    if([Windows.Application]::Current){[Windows.Application]::Current.Shutdown()}
 })
-if($IntegrationTest) {
+if($DesktopTest) {
+    $application=New-Object Windows.Application
+    $application.ShutdownMode='OnExplicitShutdown'
+    $script:desktopTestPhase=0; $script:desktopTestResult=$null
+    $script:lifecycleTimer=New-Object Windows.Threading.DispatcherTimer
+    $script:lifecycleTimer.Interval=[TimeSpan]::FromMilliseconds(400)
+    $script:lifecycleTimer.Add_Tick({
+        try {
+            switch($script:desktopTestPhase) {
+                0 {
+                    if(-not $script:hotkeyRegistered -or -not $script:tray.Visible){throw 'Hotkey or tray unavailable'}
+                    [void][FurinaDesktop]::PostMessage($script:hotkeyHandle,0x312,[IntPtr]7821,[IntPtr]::Zero)
+                }
+                1 {
+                    if($script:pet.IsVisible){throw 'Native hotkey did not hide pet'}
+                    [void][FurinaDesktop]::PostMessage($script:hotkeyHandle,0x312,[IntPtr]7821,[IntPtr]::Zero)
+                }
+                2 {
+                    if(-not $script:pet.IsVisible){throw 'Hidden application did not restore'}
+                    Show-Settings; $script:settingsWindow.UpdateLayout()
+                    $preview=New-Object Windows.Media.Imaging.RenderTargetBitmap([int]$script:settingsWindow.ActualWidth,[int]$script:settingsWindow.ActualHeight,96,96,[Windows.Media.PixelFormats]::Pbgra32)
+                    $preview.Render($script:settingsWindow)
+                    $encoder=New-Object Windows.Media.Imaging.PngBitmapEncoder
+                    $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($preview))
+                    $stream=[IO.File]::Create((Join-Path $PSScriptRoot '..\..\.tools\settings-preview.png'))
+                    try {$encoder.Save($stream)} finally {$stream.Dispose()}
+                }
+                3 {
+                    $script:settingsWindow.Close()
+                    if($script:settingsWindow.IsVisible){throw 'Settings did not hide on close'}
+                    Show-Settings
+                    if(-not $script:settingsWindow.IsVisible){throw 'Settings cannot reopen'}
+                    $script:desktopTestResult='Desktop lifecycle passed: native hotkey, tray, hidden message loop, settings reopen and shutdown.'
+                    $script:lifecycleTimer.Stop(); $script:pet.Close()
+                }
+            }
+            $script:desktopTestPhase++
+        } catch {
+            $script:desktopTestResult='Desktop lifecycle failed: '+$_.Exception.Message
+            $script:lifecycleTimer.Stop(); $script:pet.Close()
+        }
+    })
+    $script:animationTimer.Start(); $script:gazeTimer.Start(); $script:lifecycleTimer.Start()
+    [void]$application.Run($script:pet)
+    if(-not $script:desktopTestResult -or -not $script:desktopTestResult.StartsWith('Desktop lifecycle passed')){throw $script:desktopTestResult}
+    Write-Output $script:desktopTestResult
+} elseif($IntegrationTest) {
     $script:pet.Show(); $script:pet.UpdateLayout()
     $down=New-Object Windows.Input.MouseButtonEventArgs([Windows.Input.Mouse]::PrimaryDevice,[Environment]::TickCount,[Windows.Input.MouseButton]::Left)
     $down.RoutedEvent=[Windows.Controls.Image]::MouseLeftButtonDownEvent
@@ -296,7 +358,13 @@ if($IntegrationTest) {
     $script:image.RaiseEvent($up)
     if($script:queryProcess -or $script:popup.IsVisible){throw 'Dragging incorrectly triggered quota'}
     $script:image.RaiseEvent($down); $script:image.RaiseEvent($up)
-    if(-not $script:popup.IsVisible -or -not $script:queryProcess){throw 'Click failed to launch quota query'}
+    if(-not $script:clickTimer.IsEnabled){throw 'Click failed to schedule quota query'}
+    $doubleDown=New-Object Windows.Input.MouseButtonEventArgs([Windows.Input.Mouse]::PrimaryDevice,[Environment]::TickCount,[Windows.Input.MouseButton]::Left)
+    $doubleDown.RoutedEvent=[Windows.Controls.Image]::MouseLeftButtonDownEvent
+    [void][Windows.Input.MouseButtonEventArgs].GetProperty('ClickCount').GetSetMethod($true).Invoke($doubleDown,@(2))
+    $script:image.RaiseEvent($doubleDown); $script:image.RaiseEvent($up)
+    if($script:clickTimer.IsEnabled -or $script:queryProcess -or $script:state -notin @('waving','jumping')){throw 'Double click triggered quota or failed interaction'}
+    $script:image.RaiseEvent($down); $script:image.RaiseEvent($up)
     $script:testOutcome=$null
     $script:testStarted=[DateTime]::UtcNow
     $script:testTimer=New-Object Windows.Threading.DispatcherTimer
@@ -304,9 +372,9 @@ if($IntegrationTest) {
     $script:testTimer.Add_Tick({
         if($script:status.Text.StartsWith('更新于')) {
             if($script:cards.Children.Count -lt 1){throw 'Live quota cards empty'}
-            $script:testOutcome='Integration passed: drag skips quota; click displays live quota; '+$script:status.Text
+            $script:testOutcome='Integration passed: drag and double click skip quota; single click displays live quota; '+$script:status.Text
             $script:testTimer.Stop(); $script:pet.Close()
-        } elseif(-not $script:queryTimer.IsEnabled -or ([DateTime]::UtcNow-$script:testStarted).TotalSeconds -gt 30) {
+        } elseif((-not $script:queryTimer.IsEnabled -and -not $script:clickTimer.IsEnabled) -or ([DateTime]::UtcNow-$script:testStarted).TotalSeconds -gt 30) {
             $script:testOutcome='Click integration failed: '+$script:status.Text
             $script:testTimer.Stop(); $script:pet.Close()
         }
@@ -316,17 +384,50 @@ if($IntegrationTest) {
     [void]$application.Run($script:pet)
     if(-not $script:testOutcome -or -not $script:testOutcome.StartsWith('Integration passed')){throw ('Integration did not pass: '+$script:testOutcome)}
     Write-Output $script:testOutcome
+    if($script:temporarySettings -and (Test-Path -LiteralPath $SettingsPath)){Remove-Item -LiteralPath $SettingsPath}
 } elseif($SmokeTest) {
-    $script:pet.Show(); $script:pet.Hide()
+    $script:pet.Show(); $script:pet.UpdateLayout()
+    $initialScale=$script:preferences.scale
+    if([Math]::Abs($script:pet.Width-192*$initialScale/100) -gt .1){throw 'Loaded scale not applied'}
+    Show-Settings
+    $script:sizeSlider.Value=150
+    $script:settingsWindow.FindName('GazeCheck').IsChecked=$false
+    $script:settingsWindow.FindName('PhrasesCheck').IsChecked=$false
+    $script:frequencyBox.SelectedIndex=2
+    $script:pet.Left=120; $script:pet.Top=80
+    Save-SettingsFromControls
+    $saved=Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if($saved.scale -ne 150 -or $saved.gaze -ne $false -or $saved.phrases -ne $false -or $saved.interactionSeconds -ne 120 -or $script:pet.Width -ne 288){throw 'Settings persistence failed'}
+    Update-DesktopVisibility $true
+    if($script:pet.IsVisible -or -not $script:fullscreenHidden){throw 'Fullscreen hide failed'}
+    Update-DesktopVisibility $false
+    if(-not $script:pet.IsVisible){throw 'Fullscreen restore failed'}
+    Hide-Pet; Update-DesktopVisibility $false
+    if($script:pet.IsVisible){throw 'Manual hide unexpectedly restored'}
+    Show-Pet
+    if(-not $script:pet.IsVisible -or $script:manuallyHidden){throw 'Tray restore failed'}
+    Play-Interaction
+    if($script:state -notin @('waving','jumping') -or $script:bubble.IsOpen){throw 'Interaction preference failed'}
+    $script:preferences.phrases=$true; Play-Interaction
+    if(-not $script:bubble.IsOpen -or -not $script:bubbleText.Text){throw 'Interaction phrase failed'}
+    Set-StartupEnabled $true
+    if($script:testStartupCommand -notlike '*-WindowStyle Hidden*-File "*launch.ps1"'){throw 'Startup command quoting failed'}
+    Set-StartupEnabled $false
+    if($script:testStartupCommand){throw 'Startup disable failed'}
+    $script:pet.Hide()
     $testData='{"ok":true,"buckets":[{"name":"codex","windows":[{"kind":"primary","minutes":300,"remaining":42,"resetLocal":"09-13 23:43"},{"kind":"secondary","minutes":10080,"remaining":null,"resetLocal":null}]}],"updatedLocal":"12:00:00"}' | ConvertFrom-Json
     Render-Quota $testData
     if($script:cards.Children.Count -ne 2){throw 'Quota cards smoke test failed'}
     if($script:cells['idle'].Count -ne 6 -or $script:cells['running-left'].Count -ne 8 -or $script:lookCells.Count -ne 16){throw 'Animation frame count failed'}
     Set-PetState 'running'; Set-PetState 'waving'; Set-PetState 'idle'
     $script:pet.Close()
-    Write-Output 'WPF smoke test passed: transparency, atlas crops, quota cards, missing values and state switching.'
+    if($script:temporarySettings -and (Test-Path -LiteralPath $SettingsPath)){Remove-Item -LiteralPath $SettingsPath}
+    Write-Output ('WPF smoke passed: loaded scale '+$initialScale+'%; saved size/position/preferences; interaction; hide/restore; startup command; quota cards.')
 } else {
     $script:animationTimer.Start()
     $script:gazeTimer.Start()
-    [void]$script:pet.ShowDialog()
+    $script:desktopTimer.Start()
+    $application=New-Object Windows.Application
+    $application.ShutdownMode='OnExplicitShutdown'
+    [void]$application.Run($script:pet)
 }
