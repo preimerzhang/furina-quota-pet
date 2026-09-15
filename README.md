@@ -26,6 +26,12 @@
 
 原始参考图片、生成中间文件、运行日志、缓存和本机辅助工具保留在本地，未纳入版本控制。
 
+## 互动全息卡
+
+[![芙宁娜水色舞台全息卡](furina-holo-card/renders/hero.png)](furina-holo-card/README.md)
+
+独立的 WebGL 全息收藏卡支持拖动倾斜、滚轮缩放、点击翻面、分层景深调整，以及珠光、银箔、烫金和原画四种表面效果。仓库同时提供可直接运行的网页版本、Blender 工程与重新构建脚本，详见[全息卡说明](furina-holo-card/README.md)。
+
 ## 产品宣传片
 
 [![芙宁娜桌面宠物宣传片封面](media/promo/poster.png)](media/promo/furina-desktop-pet-30s.mp4)

@@ -6,3 +6,5 @@
 *.png binary
 *.webp binary
 *.mp4 binary
+*.blend binary
+*.glb binary

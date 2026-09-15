@@ -7,6 +7,12 @@
 /media/*
 !/media/promo/
 !/media/promo/*
+!/furina-holo-card/
+!/furina-holo-card/**
+/furina-holo-card/tools/
+/furina-holo-card/verification/
+/furina-holo-card/*.zip
+/furina-holo-card/subject-original.png
 !/furina-pet/
 /furina-pet/*
 !/furina-pet/desktop/

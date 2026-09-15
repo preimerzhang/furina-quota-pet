@@ -1,0 +1,32 @@
+{
+  "title": "芙宁娜",
+  "subtitle": "FURINA · 水色舞台",
+  "technique": "众水的舞台",
+  "tagline": "让这一刻，成为值得珍藏的谢幕。",
+  "edition": "001 / 001 · FAN ART",
+  "collection": "水色舞台 · 全息典藏",
+  "description": "以本地芙宁娜图片为身份参考的原创同人全息卡。",
+  "font": "C:/Windows/Fonts/msyh.ttc",
+  "assets": {
+    "model": "./assets/card.glb",
+    "subject": "./assets/subject.png",
+    "background": "./assets/background.png",
+    "text": "./assets/text.png",
+    "lineart": "./assets/lineart.png",
+    "effects": "./assets/effects.png"
+  },
+  "parameters": {
+    "subjectScale": 1.35,
+    "subjectDepth": 0.4,
+    "backgroundDepth": -0.25,
+    "effectsDepth": 0.6,
+    "foil": 0.52
+  },
+  "safeArea": {
+    "scale": 1,
+    "offset": [
+      0,
+      0
+    ]
+  }
+}
