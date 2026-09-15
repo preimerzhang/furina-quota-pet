@@ -26,6 +26,14 @@
 
 原始参考图片、生成中间文件、运行日志、缓存和本机辅助工具保留在本地，未纳入版本控制。
 
+## 产品宣传片
+
+[![芙宁娜桌面宠物宣传片封面](media/promo/poster.png)](media/promo/furina-desktop-pet-30s.mp4)
+
+- [观看或下载 30 秒宣传片](media/promo/furina-desktop-pet-30s.mp4)
+- [下载无配乐版（保留音效）](media/promo/furina-desktop-pet-30s-no-bgm.mp4)
+- [宣传片说明与发布文案](media/promo/README.md)
+
 ## 验证
 
 ```powershell

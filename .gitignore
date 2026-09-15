@@ -3,6 +3,10 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/media/
+/media/*
+!/media/promo/
+!/media/promo/*
 !/furina-pet/
 /furina-pet/*
 !/furina-pet/desktop/
